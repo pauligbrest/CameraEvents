@@ -4,6 +4,7 @@ Borrowed code from https://github.com/johnnyletrois/dahua-watch
 And https://github.com/SaWey/home-assistant-dahua-event
 Author: PsycikNZ
 """
+import jsonpickle as jsonpickle
 
 REQUIREMENTS = ['pycurl>=7']
 
@@ -202,12 +203,14 @@ class DahuaDevice():
                 # {{ \"message\": \"Motion Detected: {0}\", \"imagebase64\": \"{1}\" }}"
                 imagepayload = (base64.encodebytes(image)).decode("utf-8")
                 if publishImages:
-                    msgpayload = json.dumps({"message": message, "imagebase64": imagepayload})
+                    msgpayload = json.dumps(imagepayload)
+                    self.client.publish(self.basetopic + "/{0}/Image".format(channelName), msgpayload)
                 else:
                     msgpayload = json.dumps({"message": message, "imagurl": imageurl})
+                    self.client.publish(self.basetopic + "/{0}/ImageUrl".format(channelName), msgpayload)
                 # msgpayload = "{{ \"message\": \"{0}\", \"imagebase64\": \"{1}\" }}".format(message,imgpayload)
 
-                self.client.publish(self.basetopic + "/{0}/Image".format(channelName), msgpayload)
+
 
         except Exception as ex:
             _LOGGER.error("Error sending image: " + str(ex))
@@ -666,12 +669,32 @@ class DahuaDevice():
 
             if Alarm["Code"] == "FaceComparision":
                 faceData = json.loads(Alarm["data"], object_hook=lambda d: SimpleNamespace(**d))
-                _LOGGER.info(
-                    "Face Comparison:" + Alarm["name"] + " Index: " + Alarm["channel"] + " Code: " + Alarm["Code"]
-                )
-                _LOGGER.info(
-                    "Face data Face: {} ".format(faceData.Face)
-                )
+                # _LOGGER.info(
+                #     "Face Comparison:" + Alarm["name"] + " Index: " + Alarm["channel"] + " Code: " + Alarm["Code"]
+                # )
+
+                if not self.client.connected_flag:
+                    self.client.reconnect()
+                if Alarm["action"] == "Pulse":
+                    # eventStart = True
+                    faceTopic = "{}".format(faceData.Face)
+                    _LOGGER.info(
+                        "FaceComparision: {} ".format(faceData.Face)
+                    )
+                    process = threading.Thread(target=self.SnapshotImage, args=(
+                        index + self.snapshotoffset, Alarm["channel"],
+                        "FaceComparision Detected: {0}".format(Alarm["channel"]),
+                        True))
+                    process.daemon = True  # Daemonize thread
+                    process.start()
+                    # self.client.publish(self.basetopic + "/" + Alarm["Code"] + "/" + Alarm["channel"], "ON")
+                    # self.client.publish(self.basetopic + "/" + Alarm["channel"] + "/event", "ON")
+                    self.client.publish(self.basetopic + "/" + Alarm["channel"] + "/faceComparision", jsonpickle.encode(faceData))
+
+                if Alarm["action"] == "Stop":
+                    # eventStart = False
+                    self.client.publish(self.basetopic + "/" + Alarm["Code"] + "/" + Alarm["channel"], "OFF")
+                    self.client.publish(self.basetopic + "/" + Alarm["channel"] + "/event", "OFF")
 
             if Alarm["Code"] == "FaceRecognition":
                 faceData = json.loads(Alarm["data"], object_hook=lambda d: SimpleNamespace(**d))
@@ -681,6 +704,7 @@ class DahuaDevice():
                 _LOGGER.info(
                     "Face data Age: {} ".format(faceData.Face.Age)
                 )
+                self.client.publish(self.basetopic + "/" + Alarm["channel"] + "/faceRecognition", jsonpickle.encode(faceData.Face))
 
             if Alarm["Code"] == "VideoMotion":
                 _LOGGER.info(
@@ -696,8 +720,9 @@ class DahuaDevice():
                         # possible new process:
                         # http://192.168.10.66/cgi-bin/snapManager.cgi?action=attachFileProc&Flags[0]=Event&Events=[VideoMotion%2CVideoLoss]
                         process = threading.Thread(target=self.SnapshotImage, args=(
-                        index + self.snapshotoffset, Alarm["channel"], "Motion Detected: {0}".format(Alarm["channel"]),
-                        self.publishImages))
+                            index + self.snapshotoffset, Alarm["channel"],
+                            "Motion Detected: {0}".format(Alarm["channel"]),
+                            self.publishImages))
                         process.daemon = True  # Daemonize thread
                         process.start()
                 else:  # if Alarm["action"] == "Start":
@@ -705,12 +730,13 @@ class DahuaDevice():
                     # https://github.com/psyciknz/CameraEvents/issues/22
                     self.client.publish(self.basetopic + "/" + Alarm["Code"] + "/" + Alarm["channel"], "OFF")
                     self.client.publish(self.basetopic + "/" + Alarm["channel"] + "/event", "OFF")
-                    # _LOGGER.info("ReceiveData: calling search Clips")
-                    # starttime = datetime.datetime.now() - datetime.timedelta(minutes=1)
-                    # endtime = datetime.datetime.now()
-                    # process2 = threading.Thread(target=self.SearchClips,args=(index+self.snapshotoffset,starttime,endtime,'',False,'Search Clips VideoMotion',30,self.publishImages))
-                    # process2.daemon = True                            # Daemonize thread
-                    # process2.start()
+                    _LOGGER.info("ReceiveData: calling search Clips | {}".format(Alarm["channel"]))
+                    starttime = datetime.datetime.now() - datetime.timedelta(minutes=1)
+                    endtime = datetime.datetime.now()
+                    process2 = threading.Thread(target=self.SearchClips, args=(
+                        index + self.snapshotoffset, starttime, endtime, '', False, 'Search Clips VideoMotion', 30))
+                    process2.daemon = True  # Daemonize thread
+                    process2.start()
             elif Alarm["Code"] == "AlarmLocal":
                 _LOGGER.info(
                     "Alarm Local received: " + Alarm["name"] + " Index: " + str(index) + " Code: " + Alarm["Code"])
@@ -749,8 +775,8 @@ class DahuaDevice():
                         # possible new process:
                         # http://192.168.10.66/cgi-bin/snapManager.cgi?action=attachFileProc&Flags[0]=Event&Events=[VideoMotion%2CVideoLoss]
                         process = threading.Thread(target=self.SnapshotImage, args=(
-                        index + self.snapshotoffset, Alarm["channel"],
-                        "IVS: {0}: {1}".format(Alarm["channel"], regionText), self.publishImages))
+                            index + self.snapshotoffset, Alarm["channel"],
+                            "IVS: {0}: {1}".format(Alarm["channel"], regionText), self.publishImages))
                         process.daemon = True  # Daemonize thread
                         process.start()
                 else:  # if Alarm["action"] == "Start":
