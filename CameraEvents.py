@@ -172,7 +172,7 @@ class DahuaDevice():
 
         return -1
 
-    def SnapshotImage(self, channel, channelName, message, publishImages=False):
+    def SnapshotImage(self, channel, channelName, message, publishImages=False, obj=''):
         """Takes a snap shot image for the specified channel
         channel (index number starts at 1)
         channelName if known for messaging
@@ -203,11 +203,10 @@ class DahuaDevice():
                 # {{ \"message\": \"Motion Detected: {0}\", \"imagebase64\": \"{1}\" }}"
                 imagepayload = (base64.encodebytes(image)).decode("utf-8")
                 if publishImages:
-                    msgpayload = json.dumps(imagepayload)
-                    self.client.publish(self.basetopic + "/{0}/Image".format(channelName), msgpayload)
+                    msgpayload = json.dumps({"message": message, "imagebase64": imagepayload, "object": obj})
                 else:
-                    msgpayload = json.dumps({"message": message, "imagurl": imageurl})
-                    self.client.publish(self.basetopic + "/{0}/ImageUrl".format(channelName), msgpayload)
+                    msgpayload = json.dumps({"message": message, "imagurl": imageurl, "object": obj})
+                self.client.publish(self.basetopic + "/{0}/Image".format(channelName), msgpayload)
                 # msgpayload = "{{ \"message\": \"{0}\", \"imagebase64\": \"{1}\" }}".format(message,imgpayload)
 
 
@@ -681,15 +680,16 @@ class DahuaDevice():
                     _LOGGER.info(
                         "FaceComparision: {} ".format(faceData.Face)
                     )
-                    process = threading.Thread(target=self.SnapshotImage, args=(
-                        index + self.snapshotoffset, Alarm["channel"],
-                        "FaceComparision Detected: {0}".format(Alarm["channel"]),
-                        True))
-                    process.daemon = True  # Daemonize thread
-                    process.start()
+                    # process = threading.Thread(target=self.SnapshotImage, args=(
+                    #     index + self.snapshotoffset, Alarm["channel"],
+                    #     "FaceComparision Detected: {0}".format(Alarm["channel"]),
+                    #     True, jsonpickle.encode(faceData)))
+                    # process.daemon = True  # Daemonize thread
+                    # process.start()
                     # self.client.publish(self.basetopic + "/" + Alarm["Code"] + "/" + Alarm["channel"], "ON")
                     # self.client.publish(self.basetopic + "/" + Alarm["channel"] + "/event", "ON")
-                    self.client.publish(self.basetopic + "/" + Alarm["channel"] + "/faceComparision", jsonpickle.encode(faceData))
+                    self.client.publish(self.basetopic + "/" + Alarm["channel"] + "/faceComparision",
+                                        jsonpickle.encode(faceData))
 
                 if Alarm["action"] == "Stop":
                     # eventStart = False
@@ -701,10 +701,21 @@ class DahuaDevice():
                 _LOGGER.info(
                     "Face Recognition:" + Alarm["name"] + " Index: " + Alarm["channel"] + " Code: " + Alarm["Code"]
                 )
+
                 _LOGGER.info(
                     "Face data Age: {} ".format(faceData.Face.Age)
                 )
-                self.client.publish(self.basetopic + "/" + Alarm["channel"] + "/faceRecognition", jsonpickle.encode(faceData.Face))
+
+                if Alarm["action"] == "Stop":
+                    process = threading.Thread(target=self.SnapshotImage, args=(
+                        index + self.snapshotoffset, Alarm["channel"],
+                        "FaceRecognition Detected: {0} {1}".format(Alarm["channel"], datetime.datetime.now()),
+                        True, jsonpickle.encode(faceData)))
+                    process.daemon = True  # Daemonize thread
+                    process.start()
+
+                self.client.publish(self.basetopic + "/" + Alarm["channel"] + "/faceRecognition",
+                                    jsonpickle.encode(faceData.Face))
 
             if Alarm["Code"] == "VideoMotion":
                 _LOGGER.info(
